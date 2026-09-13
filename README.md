@@ -1,5 +1,10 @@
 # SAWPro to Cubase (`sawpro_to_cubase`)
 
+![AI Assisted](https://img.shields.io/badge/AI%20Assisted-Claude%20%2F%20Gemini-blueviolet)
+
+## AI Assistance Disclosure
+Parts of the codebase, boilerplate, or documentation in this repository were written with the assistance of Large Language Models (LLMs) like Claude and Gemini. All logic and generated code have been reviewed, tested, and validated by the maintainer.
+
 A Python utility and library for reverse-engineering legacy **IQS SAWPro / SAWPLUS32 / SAW32** binary session files (`.EDL` and `.ED0`) and exporting multi-track timelines to modern Digital Audio Workstations (specifically **Steinberg Cubase**, as well as Pro Tools, Logic Pro, and DaVinci Resolve).
 
 <p align="center">
