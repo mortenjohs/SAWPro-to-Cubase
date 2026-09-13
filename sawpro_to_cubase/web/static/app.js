@@ -616,7 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  const player = new MultitrackPlayer();
+  const player = window.player = new MultitrackPlayer();
 
   // =========================================================================
   // Audio Mixdown & WAV Encoding
