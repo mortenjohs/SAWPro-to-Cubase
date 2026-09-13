@@ -87,16 +87,24 @@ class SawWebHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/download/"):
             parts = path.strip("/").split("/")
             if len(parts) == 4:
-                _, _, session_id, filename = parts
+                _, _, session_id, raw_filename = parts
+                filename = urllib.parse.unquote(raw_filename)
                 with CACHE_LOCK:
                     session_data = SESSION_CACHE.get(session_id)
-                if not session_data or filename not in session_data["exports"]:
+                if not session_data or "exports" not in session_data:
                     self.send_error_json("Download link expired or not found", status=HTTPStatus.NOT_FOUND)
                     return
 
-                target_file = session_data["exports"][filename]
-                if not target_file.is_file():
-                    self.send_error_json("Export file missing", status=HTTPStatus.NOT_FOUND)
+                exports = session_data["exports"]
+                target_file = exports.get(filename)
+                if not target_file:
+                    for k, v in exports.items():
+                        if k.lower() == filename.lower() or k == raw_filename or k.lower() == raw_filename.lower():
+                            target_file = v
+                            break
+
+                if not target_file or not target_file.is_file():
+                    self.send_error_json("Export file missing or not found", status=HTTPStatus.NOT_FOUND)
                     return
 
                 mime_type = "application/octet-stream"
@@ -107,10 +115,16 @@ class SawWebHandler(BaseHTTPRequestHandler):
                 elif filename.endswith(".csv"):
                     mime_type = "text/csv"
 
+                safe_ascii_name = filename.encode("ascii", "replace").decode("ascii").replace('"', '')
+                quoted_name = urllib.parse.quote(filename)
+
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", mime_type)
                 self.send_header("Content-Length", str(target_file.stat().st_size))
-                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{safe_ascii_name}"; filename*=UTF-8\'\'{quoted_name}'
+                )
                 self.end_headers()
 
                 with open(target_file, "rb") as f:
@@ -375,9 +389,17 @@ class SawWebHandler(BaseHTTPRequestHandler):
         # 5. ZIP Bundle
         zip_name = f"{base_name}_interchange.zip"
         zip_path = export_dir / zip_name
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
             for fname, fpath in exports_map.items():
                 zf.write(fpath, arcname=fname)
+            # Include source audio files in the zip bundle so it is fully self-contained
+            for af in audio_files:
+                if af.is_file():
+                    zf.write(af, arcname=af.name)
+            # Include original SAWPro session file for archiving
+            if primary_edl.is_file():
+                zf.write(primary_edl, arcname=primary_edl.name)
+
             # Add a helpful README inside the zip
             readme_content = f"""SAWPro EDL Conversion Bundle
 ============================
@@ -393,6 +415,7 @@ Included DAW Files:
 - {xml_name} : Steinberg Cubase Track Archive (File > Import > Track Archive)
 - {csv_name} : Plain text spreadsheet of timeline cuts and offsets
 - {cmx_name} : CMX 3600 Edit Decision List
+- {primary_edl.name} : Original SAWPro binary session file
 
 Generated with sawpro_to_cubase.
 """
@@ -416,7 +439,7 @@ Generated with sawpro_to_cubase.
 
         # Build JSON response
         downloads = {
-            fname: f"/api/download/{session_id}/{fname}" for fname in exports_map.keys()
+            fname: f"/api/download/{session_id}/{urllib.parse.quote(fname)}" for fname in exports_map.keys()
         }
 
         # Format timeline events for visual frontend lanes and Web Audio playback
@@ -482,7 +505,7 @@ Generated with sawpro_to_cubase.
             "regions": regions_data,
             "events": events_data,
             "downloads": downloads,
-            "zip_download": f"/api/download/{session_id}/{zip_name}",
+            "zip_download": f"/api/download/{session_id}/{urllib.parse.quote(zip_name)}",
             "audio_available": list({f.name for f in audio_files}),
             "audio_urls": audio_urls,
         }

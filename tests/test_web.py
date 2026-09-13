@@ -212,6 +212,52 @@ class TestWebServer(unittest.TestCase):
             self.assertTrue(up_result["success"])
             self.assertIn("Bass.wav", up_result["uploaded"])
 
+    def test_download_with_spaces_in_filename(self):
+        edl_file = DATA_DIR / "vel.edl"
+        if not edl_file.is_file():
+            self.skipTest(f"Test file not found: {edl_file}")
+
+        fields = {"format": "all"}
+        files = {
+            "session": ("10ende mai.edl", edl_file.read_bytes()),
+        }
+        body, content_type = make_multipart_body(fields, files)
+
+        req = urllib.request.Request(
+            f"{self.base_url}/api/convert",
+            data=body,
+            headers={"Content-Type": content_type},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            result = json.loads(resp.read().decode("utf-8"))
+
+        self.assertIn("10ende%20mai_interchange.zip", result["zip_download"])
+
+        # Test downloading the zip with space
+        zip_url = f"{self.base_url}{result['zip_download']}"
+        with urllib.request.urlopen(zip_url) as dl_resp:
+            self.assertEqual(dl_resp.status, 200)
+            self.assertEqual(dl_resp.headers.get("Content-Type"), "application/zip")
+            zip_bytes = dl_resp.read()
+            self.assertGreater(len(zip_bytes), 1000)
+
+            # Verify it is a valid zip archive
+            import zipfile
+            zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+            self.assertIn("10ende mai.aaf", zf.namelist())
+            self.assertIn("10ende mai_cubase.xml", zf.namelist())
+            self.assertIn("10ende mai.edl", zf.namelist())
+
+        # Test downloading individual files with spaces
+        for fname, file_url in result["downloads"].items():
+            req_url = f"{self.base_url}{file_url}"
+            with urllib.request.urlopen(req_url) as single_resp:
+                self.assertEqual(single_resp.status, 200)
+                content = single_resp.read()
+                self.assertGreater(len(content), 0)
+
     def test_convert_missing_file(self):
         fields = {"format": "all"}
         files = {}
