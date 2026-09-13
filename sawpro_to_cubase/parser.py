@@ -416,6 +416,7 @@ def parse_edl(file_path: Path | str, audio_dir: Optional[Path | str] = None) -> 
     header.active_tracks = len(tracks)
 
     # 7. Parse Track Mute and Solo States (MUTE and SOLO chunks)
+    max_track = max(tracks.keys(), default=44) if tracks else 44
     track_mutes: dict[int, bool] = {}
     match_mute = re.search(rb"MUTE\s*\x00", data)
     if match_mute:
@@ -423,7 +424,7 @@ def parse_edl(file_path: Path | str, audio_dir: Optional[Path | str] = None) -> 
         if pos + 44 * 4 <= len(data):
             vals = struct.unpack_from("<44I", data, pos)
             for trk_idx, val in enumerate(vals, 1):
-                if val != 0:
+                if val != 0 and trk_idx <= max_track:
                     track_mutes[trk_idx] = True
 
     track_solos: dict[int, bool] = {}
@@ -433,7 +434,7 @@ def parse_edl(file_path: Path | str, audio_dir: Optional[Path | str] = None) -> 
         if pos + 44 * 4 <= len(data):
             vals = struct.unpack_from("<44I", data, pos)
             for trk_idx, val in enumerate(vals, 1):
-                if val != 0:
+                if val != 0 and trk_idx <= max_track:
                     track_solos[trk_idx] = True
 
     return SawSession(

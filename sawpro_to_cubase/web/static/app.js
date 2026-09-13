@@ -114,6 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
       this.trackGains = new Map(); // trackNum -> GainNode
       this.trackMutes = new Map(); // trackNum -> boolean
       this.trackSolos = new Map(); // trackNum -> boolean
+      this.activeTracks = new Set(); // Set of active track numbers
       this.audioBuffers = new Map(); // filename.toLowerCase() -> AudioBuffer
       this.activeSources = [];
       this.isPlaying = false;
@@ -127,23 +128,29 @@ document.addEventListener('DOMContentLoaded', () => {
       this.lastVolume = 0.8;
     }
 
-    initContext() {
+    async initContext() {
       if (!this.audioCtx) {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         this.audioCtx = new AudioContextClass();
         this.masterGain = this.audioCtx.createGain();
-        this.masterGain.gain.setValueAtTime(parseFloat(masterVolume.value) || 0.8, this.audioCtx.currentTime);
+        const vol = this.isMasterMuted ? 0.0 : (parseFloat(masterVolume.value) || 0.8);
+        this.masterGain.gain.setValueAtTime(vol, this.audioCtx.currentTime);
         this.masterGain.connect(this.audioCtx.destination);
       }
       if (this.audioCtx.state === 'suspended') {
-        this.audioCtx.resume();
+        try {
+          await this.audioCtx.resume();
+        } catch (e) {
+          console.warn('AudioContext resume failed:', e);
+        }
       }
     }
 
     async decodeAudio(filename, arrayBuffer) {
-      this.initContext();
+      await this.initContext();
       try {
-        const buffer = await this.audioCtx.decodeAudioData(arrayBuffer);
+        const copy = arrayBuffer.slice(0);
+        const buffer = await this.audioCtx.decodeAudioData(copy);
         this.audioBuffers.set(filename.toLowerCase(), buffer);
         for (const v of getFilenameVariants(filename)) {
           this.audioBuffers.set(v.toLowerCase(), buffer);
@@ -165,9 +172,31 @@ document.addEventListener('DOMContentLoaded', () => {
       return false;
     }
 
+    hasActiveSolo() {
+      if (!this.activeTracks || this.activeTracks.size === 0) {
+        return Array.from(this.trackSolos.values()).some(v => v);
+      }
+      for (const [trk, isSolo] of this.trackSolos.entries()) {
+        if (isSolo && this.activeTracks.has(trk)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    shouldMuteTrack(trackNum) {
+      const isMuted = !!this.trackMutes.get(trackNum);
+      const isSolo = !!this.trackSolos.get(trackNum);
+      const hasSolo = this.hasActiveSolo();
+      return isMuted || (hasSolo && !isSolo);
+    }
+
     getTrackGain(trackNum) {
       if (!this.trackGains.has(trackNum)) {
+        if (!this.audioCtx) return null;
         const gain = this.audioCtx.createGain();
+        const shouldMute = this.shouldMuteTrack(trackNum);
+        gain.gain.setValueAtTime(shouldMute ? 0.0 : 1.0, this.audioCtx.currentTime);
         gain.connect(this.masterGain);
         this.trackGains.set(trackNum, gain);
       }
@@ -175,26 +204,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     updateTrackGains() {
-      if (!this.audioCtx) return;
-      const hasSolo = Array.from(this.trackSolos.values()).some(v => v);
-      const now = this.audioCtx.currentTime;
+      const now = this.audioCtx ? this.audioCtx.currentTime : 0;
 
-      for (const [trackNum, gainNode] of this.trackGains.entries()) {
-        const isMuted = !!this.trackMutes.get(trackNum);
-        const isSolo = !!this.trackSolos.get(trackNum);
-        const shouldMute = isMuted || (hasSolo && !isSolo);
-        gainNode.gain.setValueAtTime(shouldMute ? 0.0 : 1.0, now);
-
-        // Update UI lane opacity
-        const lane = document.querySelector(`.timeline-lane[data-track="${trackNum}"]`);
-        if (lane) {
-          lane.classList.toggle('is-muted', shouldMute);
+      // Update Web Audio GainNodes
+      if (this.audioCtx) {
+        for (const [trackNum, gainNode] of this.trackGains.entries()) {
+          const shouldMute = this.shouldMuteTrack(trackNum);
+          gainNode.gain.setValueAtTime(shouldMute ? 0.0 : 1.0, now);
         }
       }
+
+      // Update UI lane muted styling
+      document.querySelectorAll('.timeline-lane[data-track]').forEach(lane => {
+        const trk = parseInt(lane.getAttribute('data-track'), 10);
+        const shouldMute = this.shouldMuteTrack(trk);
+        lane.classList.toggle('is-muted', shouldMute);
+      });
     }
 
-    play(fromSeconds = null) {
-      this.initContext();
+    async play(fromSeconds = null) {
+      await this.initContext();
       if (this.isPlaying) {
         this.stopSources();
       }
@@ -207,6 +236,9 @@ document.addEventListener('DOMContentLoaded', () => {
         this.currentPositionSeconds = 0;
       }
 
+      // Sync track gains with current mute/solo state before playback
+      this.updateTrackGains();
+
       const now = this.audioCtx.currentTime;
       this.playbackStartCtxTime = now - this.currentPositionSeconds;
       this.isPlaying = true;
@@ -214,7 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const pos = this.currentPositionSeconds;
 
-      // Schedule clips across tracks
+      // Schedule clips across tracks safely
       for (const ev of this.events) {
         const evStart = ev.start_seconds;
         const evEnd = evStart + ev.duration_seconds;
@@ -231,28 +263,44 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (!buffer) continue;
 
+        const trackGain = this.getTrackGain(ev.track);
+        if (!trackGain) continue;
+
         const source = this.audioCtx.createBufferSource();
         source.buffer = buffer;
-
-        const trackGain = this.getTrackGain(ev.track);
         source.connect(trackGain);
 
-        if (pos <= evStart) {
-          // Scheduled in future
-          const when = now + (evStart - pos);
-          const offset = Math.max(0, ev.source_in_seconds || 0);
-          const dur = ev.duration_seconds;
-          source.start(when, offset, dur);
-        } else {
-          // Playhead is in middle of clip: start immediately with offset
-          const elapsedInClip = pos - evStart;
-          const offset = Math.max(0, (ev.source_in_seconds || 0) + elapsedInClip);
-          const remainingDur = ev.duration_seconds - elapsedInClip;
-          if (remainingDur > 0) {
-            source.start(now, offset, remainingDur);
+        try {
+          const bufferDur = buffer.duration;
+          if (pos <= evStart) {
+            // Scheduled in future
+            const when = now + (evStart - pos);
+            const rawOffset = Math.max(0, ev.source_in_seconds || 0);
+            if (rawOffset >= bufferDur) continue;
+            const safeOffset = rawOffset;
+            const maxAvailableDur = Math.max(0, bufferDur - safeOffset);
+            const safeDur = Math.min(ev.duration_seconds, maxAvailableDur);
+            if (safeDur > 0) {
+              source.start(when, safeOffset, safeDur);
+              this.activeSources.push(source);
+            }
+          } else {
+            // Playhead is in middle of clip: start immediately with offset
+            const elapsedInClip = pos - evStart;
+            const rawOffset = Math.max(0, (ev.source_in_seconds || 0) + elapsedInClip);
+            if (rawOffset >= bufferDur) continue;
+            const safeOffset = rawOffset;
+            const rawRemainingDur = ev.duration_seconds - elapsedInClip;
+            const maxAvailableDur = Math.max(0, bufferDur - safeOffset);
+            const safeDur = Math.min(rawRemainingDur, maxAvailableDur);
+            if (safeDur > 0) {
+              source.start(now, safeOffset, safeDur);
+              this.activeSources.push(source);
+            }
           }
+        } catch (err) {
+          console.warn(`Error scheduling clip for ${ev.soundfile_name}:`, err);
         }
-        this.activeSources.push(source);
       }
 
       this.updateTransportUI(true);
@@ -276,7 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
       this.renderPosition(0);
     }
 
-    seek(seconds) {
+    async seek(seconds) {
       const wasPlaying = this.isPlaying;
       if (this.isPlaying) {
         this.stopSources();
@@ -285,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
       this.renderPosition(this.currentPositionSeconds);
 
       if (wasPlaying) {
-        this.play();
+        await this.play();
       }
     }
 
@@ -385,15 +433,12 @@ document.addEventListener('DOMContentLoaded', () => {
       masterGain.gain.setValueAtTime(this.isMasterMuted ? 0.0 : vol, 0);
       masterGain.connect(offlineCtx.destination);
 
-      const hasSolo = Array.from(this.trackSolos.values()).some(v => v);
       const trackGains = new Map();
 
       for (const ev of this.events) {
         if (!trackGains.has(ev.track)) {
           const gain = offlineCtx.createGain();
-          const isMuted = !!this.trackMutes.get(ev.track);
-          const isSolo = !!this.trackSolos.get(ev.track);
-          const shouldMute = isMuted || (hasSolo && !isSolo);
+          const shouldMute = this.shouldMuteTrack(ev.track);
           gain.gain.setValueAtTime(shouldMute ? 0.0 : 1.0, 0);
           gain.connect(masterGain);
           trackGains.set(ev.track, gain);
@@ -419,9 +464,14 @@ document.addEventListener('DOMContentLoaded', () => {
         source.connect(gainNode);
 
         const start = Math.max(0, ev.start_seconds);
-        const offset = Math.max(0, ev.source_in_seconds || 0);
-        const dur = Math.max(0, ev.duration_seconds);
-        source.start(start, offset, dur);
+        const rawOffset = Math.max(0, ev.source_in_seconds || 0);
+        if (rawOffset >= buffer.duration) continue;
+        const safeOffset = rawOffset;
+        const maxAvail = Math.max(0, buffer.duration - safeOffset);
+        const safeDur = Math.min(ev.duration_seconds, maxAvail);
+        if (safeDur <= 0) continue;
+
+        source.start(start, safeOffset, safeDur);
         scheduledCount++;
       }
 
@@ -1090,10 +1140,18 @@ document.addEventListener('DOMContentLoaded', () => {
       tracksMap[ev.track].push(ev);
     });
 
+    const activeTrackNumbers = Object.keys(tracksMap).map(Number).filter(t => tracksMap[t].length > 0);
+    player.activeTracks = new Set(activeTrackNumbers);
+
     Object.keys(tracksMap).sort((a, b) => Number(a) - Number(b)).forEach(trackNumStr => {
       const trackNum = Number(trackNumStr);
       const events = tracksMap[trackNumStr];
       if (events.length === 0) return;
+
+      // Pre-create gain node if context already active
+      if (player.audioCtx) {
+        player.getTrackGain(trackNum);
+      }
 
       const lane = document.createElement('div');
       lane.className = 'timeline-lane';
@@ -1193,11 +1251,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // =========================================================================
   // Transport Event Listeners
   // =========================================================================
-  playPauseBtn.addEventListener('click', () => {
+  playPauseBtn.addEventListener('click', async () => {
     if (player.isPlaying) {
       player.pause();
     } else {
-      player.play();
+      await player.play();
     }
   });
 
@@ -1242,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Global Keyboard shortcut: Spacebar toggles Play/Pause
-  window.addEventListener('keydown', (e) => {
+  window.addEventListener('keydown', async (e) => {
     if (e.code === 'Space') {
       const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
       if (['input', 'select', 'textarea'].includes(activeTag)) return;
@@ -1251,7 +1309,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (player.isPlaying) {
           player.pause();
         } else {
-          player.play();
+          await player.play();
         }
       }
     }
