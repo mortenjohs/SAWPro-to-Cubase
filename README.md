@@ -2,6 +2,10 @@
 
 A Python utility and library for reverse-engineering legacy **IQS SAWPro / SAWPLUS32 / SAW32** binary session files (`.EDL` and `.ED0`) and exporting multi-track timelines to modern Digital Audio Workstations (specifically **Steinberg Cubase**, as well as Pro Tools, Logic Pro, and DaVinci Resolve).
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="SAWPro to Cubase Web Preview & Conversion Demo" width="100%" />
+</p>
+
 ---
 
 ## Features
@@ -54,8 +58,9 @@ sawpro-to-cubase --web
   - **Full Transport Controls**: Play, Pause, Stop, Spacebar keyboard shortcut, master volume, and master mute.
   - **Synchronized Moving Playhead**: An animated scrubber line sweeps across track lanes in sync with audio.
   - **Click-to-Seek**: Click anywhere on the ruler, lanes, or clips to scrub immediately to that point in time.
-  - **Track Solo & Mute**: Toggle individual track `M` (Mute) and `S` (Solo) buttons directly from the track lane headers.
+  - **Track Solo & Mute**: Toggle individual track `M` (Mute) and `S` (Solo) buttons directly from the track lane headers (automatically initialized from the EDL session's mute/solo flags).
   - **Client-Side Decoding**: Instant playback without server roundtrips when audio files are dropped into the browser.
+- **Mixdown Audio Export**: Download the active multitrack mix directly to **WAV** or **MP3** respecting muted and soloed tracks.
 - **One-Click DAW Exports**: Download individual `.aaf`, `_cubase.xml`, `.csv`, `_cmx.edl` files, or download all bundled in an interchange ZIP.
 
 ---
