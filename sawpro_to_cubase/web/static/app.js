@@ -63,6 +63,24 @@ document.addEventListener('DOMContentLoaded', () => {
   let stagedFiles = [];
   let currentSessionData = null;
 
+  function logToServer(event, data = {}) {
+    try {
+      fetch('/api/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event, ...data, ua: navigator.userAgent }),
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  window.addEventListener('error', (e) => {
+    logToServer('WINDOW_ERROR', { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno });
+  });
+
+  window.addEventListener('unhandledrejection', (e) => {
+    logToServer('UNHANDLED_REJECTION', { reason: String(e.reason) });
+  });
+
   // =========================================================================
   // Filename Encoding & Codepage Transliteration Helper
   // =========================================================================
@@ -110,11 +128,30 @@ document.addEventListener('DOMContentLoaded', () => {
   let sharedDecoderCtx = null;
 
   async function decodeAudioArrayBuffer(arrayBuffer) {
+    const copy = arrayBuffer.slice(0);
+
+    // 1. Try OfflineAudioContext first (WebKit & Blink: works without autoplay restrictions)
+    const OfflineCtxClass = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (OfflineCtxClass) {
+      try {
+        const offline = new OfflineCtxClass(1, 1, 44100);
+        const buf = await new Promise((resolve, reject) => {
+          const promise = offline.decodeAudioData(copy.slice(0), resolve, reject);
+          if (promise && typeof promise.then === 'function') {
+            promise.then(resolve).catch(reject);
+          }
+        });
+        if (buf) return buf;
+      } catch (err) {
+        // Fall back to live decoder
+      }
+    }
+
+    // 2. Fall back to standard context
     if (!sharedDecoderCtx || sharedDecoderCtx.state === 'closed') {
       const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
       sharedDecoderCtx = new AudioCtxClass();
     }
-    const copy = arrayBuffer.slice(0);
     return new Promise((resolve, reject) => {
       let settled = false;
       const onSuccess = (buf) => {
@@ -130,7 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       };
       try {
-        const promise = sharedDecoderCtx.decodeAudioData(copy, onSuccess, onError);
+        const promise = sharedDecoderCtx.decodeAudioData(copy.slice(0), onSuccess, onError);
         if (promise && typeof promise.then === 'function') {
           promise.then(onSuccess).catch(onError);
         }
@@ -187,15 +224,6 @@ document.addEventListener('DOMContentLoaded', () => {
           console.warn('AudioContext resume error:', e);
         }
       }
-
-      // Prime WebKit audio engine with a 1-sample silent sound buffer
-      try {
-        const silentBuf = this.audioCtx.createBuffer(1, 1, 22050);
-        const silentSrc = this.audioCtx.createBufferSource();
-        silentSrc.buffer = silentBuf;
-        silentSrc.connect(this.audioCtx.destination);
-        silentSrc.start(0);
-      } catch (e) {}
 
       const vol = this.isMasterMuted ? 0.0 : (parseFloat(masterVolume.value) || 0.8);
       this.masterGain.gain.value = vol;
@@ -332,6 +360,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const pos = this.currentPositionSeconds;
 
+      logToServer('PLAY_START', {
+        pos,
+        sessionDur: this.sessionDuration,
+        eventsTotal: this.events.length,
+        audioBuffersCount: this.audioBuffers.size,
+        audioCtxState: this.audioCtx ? this.audioCtx.state : 'null',
+        audioCtxTime: now,
+      });
+
       // 4. Schedule clips across tracks safely
       for (const ev of this.events) {
         const evStart = ev.start_seconds;
@@ -358,9 +395,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
           const bufferDur = buffer.duration;
+          const currentCtx = this.audioCtx.currentTime;
           if (pos <= evStart) {
-            // Scheduled in future
-            const when = now + (evStart - pos);
+            // Scheduled in future with safe 10ms hardware lookahead
+            const when = Math.max(currentCtx + 0.01, now + (evStart - pos));
             const rawOffset = Math.max(0, ev.source_in_seconds || 0);
             if (rawOffset >= bufferDur) continue;
             const safeOffset = rawOffset;
@@ -380,14 +418,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const maxAvailableDur = Math.max(0, bufferDur - safeOffset);
             const safeDur = Math.min(rawRemainingDur, maxAvailableDur);
             if (safeDur > 0) {
-              source.start(now, safeOffset, safeDur);
+              source.start(currentCtx + 0.01, safeOffset, safeDur);
               this.activeSources.push(source);
             }
           }
         } catch (err) {
           console.warn(`Error scheduling clip for ${ev.soundfile_name}:`, err);
+          logToServer('SCHEDULE_ERROR', { file: ev.soundfile_name, error: String(err) });
         }
       }
+
+      logToServer('PLAY_SCHEDULED', {
+        activeSourcesCount: this.activeSources.length,
+        audioCtxState: this.audioCtx ? this.audioCtx.state : 'null',
+        masterGainVal: this.masterGain ? this.masterGain.gain.value : 'null',
+      });
 
       console.log(`[Preview Player] Playing: ${this.activeSources.length} clips scheduled, AudioContext state: ${this.audioCtx.state}`);
 
@@ -1101,6 +1146,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    logToServer('RESOLVE_AUDIO_END', { loadedCount, needed: needed.length });
     if (loadedCount === needed.length) {
       setAudioStatus('ready', `Audio Ready (${loadedCount}/${needed.length} tracks loaded)`);
       loadAudioFilesBtn.style.display = 'none';

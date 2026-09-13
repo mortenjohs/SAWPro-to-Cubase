@@ -203,6 +203,13 @@ class SawWebHandler(BaseHTTPRequestHandler):
             self.handle_mix_mp3(parsed_url)
             return
 
+        if parsed_url.path == "/api/log":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8", errors="replace")
+            print(f"[CLIENT LOG] {body}")
+            self.send_json_response({"ok": True})
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
     def handle_mix_mp3(self, parsed_url) -> None:
