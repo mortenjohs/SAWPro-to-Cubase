@@ -54,6 +54,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const volIcon = document.getElementById('volIcon');
   const masterVolume = document.getElementById('masterVolume');
   const timelinePlayhead = document.getElementById('timelinePlayhead');
+  const exportMixWavBtn = document.getElementById('exportMixWavBtn');
+  const exportMixMp3Btn = document.getElementById('exportMixMp3Btn');
+  const downloadGridMixWavBtn = document.getElementById('downloadGridMixWavBtn');
+  const downloadGridMixMp3Btn = document.getElementById('downloadGridMixMp3Btn');
 
   // Staged files list: Array of File objects
   let stagedFiles = [];
@@ -363,9 +367,217 @@ document.addEventListener('DOMContentLoaded', () => {
         this.setMasterVolume(0);
       }
     }
+
+    async renderMix(targetSampleRate = 44100) {
+      if (this.sessionDuration <= 0) {
+        throw new Error("Session duration is 0 seconds.");
+      }
+
+      this.initContext();
+      const sr = this.audioCtx ? this.audioCtx.sampleRate : targetSampleRate;
+      const totalFrames = Math.max(1, Math.ceil(this.sessionDuration * sr));
+
+      const OfflineCtxClass = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const offlineCtx = new OfflineCtxClass(2, totalFrames, sr);
+
+      const masterGain = offlineCtx.createGain();
+      const vol = parseFloat(masterVolume.value) || 0.8;
+      masterGain.gain.setValueAtTime(this.isMasterMuted ? 0.0 : vol, 0);
+      masterGain.connect(offlineCtx.destination);
+
+      const hasSolo = Array.from(this.trackSolos.values()).some(v => v);
+      const trackGains = new Map();
+
+      for (const ev of this.events) {
+        if (!trackGains.has(ev.track)) {
+          const gain = offlineCtx.createGain();
+          const isMuted = !!this.trackMutes.get(ev.track);
+          const isSolo = !!this.trackSolos.get(ev.track);
+          const shouldMute = isMuted || (hasSolo && !isSolo);
+          gain.gain.setValueAtTime(shouldMute ? 0.0 : 1.0, 0);
+          gain.connect(masterGain);
+          trackGains.set(ev.track, gain);
+        }
+      }
+
+      let scheduledCount = 0;
+      for (const ev of this.events) {
+        let buffer = this.audioBuffers.get((ev.soundfile_name || '').toLowerCase());
+        if (!buffer && ev.soundfile_name) {
+          for (const v of getFilenameVariants(ev.soundfile_name)) {
+            buffer = this.audioBuffers.get(v.toLowerCase());
+            if (buffer) break;
+          }
+        }
+        if (!buffer) continue;
+
+        const gainNode = trackGains.get(ev.track);
+        if (!gainNode) continue;
+
+        const source = offlineCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gainNode);
+
+        const start = Math.max(0, ev.start_seconds);
+        const offset = Math.max(0, ev.source_in_seconds || 0);
+        const dur = Math.max(0, ev.duration_seconds);
+        source.start(start, offset, dur);
+        scheduledCount++;
+      }
+
+      if (scheduledCount === 0) {
+        throw new Error("No audio files are loaded to render the mix. Please load your audio WAV files first.");
+      }
+
+      return await offlineCtx.startRendering();
+    }
   }
 
   const player = new MultitrackPlayer();
+
+  // =========================================================================
+  // Audio Mixdown & WAV Encoding
+  // =========================================================================
+  function audioBufferToWav(buffer) {
+    const numChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const format = 1; // 1 = PCM
+    const bitDepth = 16;
+
+    let interleaved;
+    if (numChannels === 2) {
+      const ch0 = buffer.getChannelData(0);
+      const ch1 = buffer.getChannelData(1);
+      interleaved = new Float32Array(ch0.length + ch1.length);
+      let idx = 0;
+      for (let i = 0; i < ch0.length; i++) {
+        interleaved[idx++] = ch0[i];
+        interleaved[idx++] = ch1[i];
+      }
+    } else {
+      interleaved = buffer.getChannelData(0);
+    }
+
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const dataByteCount = interleaved.length * bytesPerSample;
+    const arrayBuffer = new ArrayBuffer(44 + dataByteCount);
+    const view = new DataView(arrayBuffer);
+
+    // RIFF header
+    writeAscii(view, 0, 'RIFF');
+    view.setUint32(4, 36 + dataByteCount, true);
+    writeAscii(view, 8, 'WAVE');
+
+    // fmt sub-chunk
+    writeAscii(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, format, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+
+    // data sub-chunk
+    writeAscii(view, 36, 'data');
+    view.setUint32(40, dataByteCount, true);
+
+    // 16-bit PCM samples
+    let offset = 44;
+    for (let i = 0; i < interleaved.length; i++, offset += 2) {
+      const s = Math.max(-1, Math.min(1, interleaved[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
+  function writeAscii(view, offset, str) {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  }
+
+  async function exportMix(format = 'wav', triggerBtn = null) {
+    if (!currentSessionData) {
+      alert('Please convert a session first.');
+      return;
+    }
+
+    const origHtml = triggerBtn ? triggerBtn.innerHTML : null;
+    try {
+      if (triggerBtn) {
+        triggerBtn.disabled = true;
+        triggerBtn.innerHTML = `
+          <svg class="spin-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="2" x2="12" y2="6"/>
+            <line x1="12" y1="18" x2="12" y2="22"/>
+            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
+            <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+            <line x1="2" y1="12" x2="6" y2="12"/>
+            <line x1="18" y1="12" x2="22" y2="12"/>
+            <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/>
+            <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+          </svg>
+          Rendering...
+        `;
+      }
+
+      const renderedBuffer = await player.renderMix();
+      const wavBlob = audioBufferToWav(renderedBuffer);
+      const sessionBase = (currentSessionData.session_name || 'session').replace(/\.[^/.]+$/, '');
+      const outName = `${sessionBase}_mix.${format}`;
+
+      if (format === 'wav') {
+        const url = URL.createObjectURL(wavBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = outName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      } else if (format === 'mp3') {
+        const resp = await fetch(`/api/mix/mp3?name=${encodeURIComponent(sessionBase)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'audio/wav' },
+          body: wavBlob,
+        });
+
+        if (resp.ok) {
+          const mp3Blob = await resp.blob();
+          const url = URL.createObjectURL(mp3Blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = outName;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        } else {
+          const err = await resp.json().catch(() => ({ error: resp.statusText }));
+          alert(`MP3 encoding not available (${err.error || resp.statusText}).\nDownloading as WAV instead.`);
+          const url = URL.createObjectURL(wavBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${sessionBase}_mix.wav`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        }
+      }
+    } catch (err) {
+      console.error('Export mix failed:', err);
+      alert(`Export mix failed: ${err.message}`);
+    } finally {
+      if (triggerBtn) {
+        triggerBtn.disabled = false;
+        triggerBtn.innerHTML = origHtml;
+      }
+    }
+  }
 
   // =========================================================================
   // Drag and Drop Event Listeners
@@ -977,6 +1189,19 @@ document.addEventListener('DOMContentLoaded', () => {
   volMuteBtn.addEventListener('click', () => {
     player.toggleMasterMute();
   });
+
+  if (exportMixWavBtn) {
+    exportMixWavBtn.addEventListener('click', (e) => exportMix('wav', e.currentTarget));
+  }
+  if (exportMixMp3Btn) {
+    exportMixMp3Btn.addEventListener('click', (e) => exportMix('mp3', e.currentTarget));
+  }
+  if (downloadGridMixWavBtn) {
+    downloadGridMixWavBtn.addEventListener('click', (e) => exportMix('wav', e.currentTarget));
+  }
+  if (downloadGridMixMp3Btn) {
+    downloadGridMixMp3Btn.addEventListener('click', (e) => exportMix('mp3', e.currentTarget));
+  }
 
   function updateVolumeIcon(muted) {
     if (muted) {

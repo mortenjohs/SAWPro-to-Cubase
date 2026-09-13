@@ -7,7 +7,10 @@ import logging
 import mimetypes
 import os
 from pathlib import Path
+import re
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -196,7 +199,66 @@ class SawWebHandler(BaseHTTPRequestHandler):
             self.handle_audio_upload(parsed_url.path)
             return
 
+        if parsed_url.path == "/api/mix/mp3":
+            self.handle_mix_mp3(parsed_url)
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
+
+    def handle_mix_mp3(self, parsed_url) -> None:
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self.send_error_json("Empty request body", status=HTTPStatus.BAD_REQUEST)
+            return
+
+        lame_bin = shutil.which("lame")
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not lame_bin and not ffmpeg_bin:
+            self.send_error_json(
+                "No MP3 encoder (lame or ffmpeg) is installed on the host. Please export as WAV.",
+                status=HTTPStatus.NOT_IMPLEMENTED,
+            )
+            return
+
+        wav_bytes = self.rfile.read(content_length)
+        query = urllib.parse.parse_qs(parsed_url.query)
+        base_name = query.get("name", ["mix"])[0]
+        safe_name = re.sub(r"[^\w\-.]", "_", Path(base_name).stem) + "_mix.mp3"
+
+        try:
+            if lame_bin:
+                proc = subprocess.run(
+                    [lame_bin, "-b", "320", "-", "-"],
+                    input=wav_bytes,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                mp3_bytes = proc.stdout
+            else:
+                proc = subprocess.run(
+                    [ffmpeg_bin, "-y", "-i", "pipe:0", "-b:a", "320k", "-f", "mp3", "pipe:1"],
+                    input=wav_bytes,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                mp3_bytes = proc.stdout
+        except Exception as exc:
+            logger.error("MP3 conversion failed: %s", exc)
+            self.send_error_json(f"MP3 encoding failed: {exc}", status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        quoted_name = urllib.parse.quote(safe_name)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Content-Length", str(len(mp3_bytes)))
+        self.send_header(
+            "Content-Disposition",
+            f'attachment; filename="{safe_name}"; filename*=UTF-8\'\'{quoted_name}',
+        )
+        self.end_headers()
+        self.wfile.write(mp3_bytes)
 
     def handle_audio_upload(self, path: str) -> None:
         parts = path.strip("/").split("/")

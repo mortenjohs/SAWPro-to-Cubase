@@ -252,6 +252,25 @@
               </button>
               <input type="range" id="masterVolume" min="0" max="1" step="0.01" value="0.8" class="vol-slider" title="Master Volume">
             </div>
+
+            <div class="transport-export">
+              <button class="btn btn-xs btn-mix-wav" id="exportMixWavBtn" title="Bounce active multitrack mix (respects track mutes and solos) to 16-bit WAV">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Mix (WAV)
+              </button>
+              <button class="btn btn-xs btn-mix-mp3" id="exportMixMp3Btn" title="Bounce active multitrack mix (respects track mutes and solos) to 320kbps MP3">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Mix (MP3)
+              </button>
+            </div>
           </div>
 
           <!-- Time Ruler & Lanes with Playhead Scrubber -->
@@ -319,6 +338,19 @@
                 <p class="export-desc">Industry-standard video and audio edit decision list format.</p>
               </div>
               <a href="#" class="btn btn-sm btn-outline" id="downloadBtnCmx" download>Download .EDL</a>
+            </div>
+
+            <!-- Active Preview Mixdown -->
+            <div class="export-box" id="exportBoxMix">
+              <div class="export-box-icon mix-icon">MIX</div>
+              <div class="export-box-content">
+                <h4 class="export-name">Preview Mixdown</h4>
+                <p class="export-desc">Stereo render of the timeline reflecting all active track mutes, solos, and fader levels.</p>
+              </div>
+              <div class="export-mix-actions">
+                <button class="btn btn-sm btn-action" id="downloadGridMixWavBtn">Download .WAV</button>
+                <button class="btn btn-sm btn-outline" id="downloadGridMixMp3Btn">Download .MP3</button>
+              </div>
             </div>
           </div>
         </div>

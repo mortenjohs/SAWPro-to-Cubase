@@ -1,9 +1,11 @@
 import io
 import json
+import shutil
 import threading
 import unittest
 import urllib.request
 import urllib.error
+import wave
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -277,6 +279,54 @@ class TestWebServer(unittest.TestCase):
                 self.assertEqual(e.code, 400)
                 data = json.loads(e.read().decode("utf-8"))
                 self.assertIn("error", data)
+
+    def test_mix_mp3_endpoint(self):
+        has_encoder = shutil.which("lame") or shutil.which("ffmpeg")
+        # Synthesize a small WAV file in memory
+        wav_buf = io.BytesIO()
+        with wave.open(wav_buf, "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(44100)
+            w.writeframes(b"\x00\x00\x00\x00" * 4410)  # 0.1s of audio
+        wav_bytes = wav_buf.getvalue()
+
+        req = urllib.request.Request(
+            f"{self.base_url}/api/mix/mp3?name=test_session",
+            data=wav_bytes,
+            headers={"Content-Type": "audio/wav"},
+            method="POST",
+        )
+
+        if has_encoder:
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(resp.headers.get("Content-Type"), "audio/mpeg")
+                disposition = resp.headers.get("Content-Disposition", "")
+                self.assertIn("test_session_mix.mp3", disposition)
+                mp3_data = resp.read()
+                self.assertGreater(len(mp3_data), 0)
+        else:
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    pass
+            except urllib.error.HTTPError as e:
+                with e:
+                    self.assertEqual(e.code, 501)
+
+    def test_mix_mp3_empty_body(self):
+        req = urllib.request.Request(
+            f"{self.base_url}/api/mix/mp3",
+            data=b"",
+            headers={"Content-Type": "audio/wav"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 400)
+        except urllib.error.HTTPError as e:
+            with e:
+                self.assertEqual(e.code, 400)
 
 
 if __name__ == "__main__":
