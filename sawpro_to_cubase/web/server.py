@@ -582,6 +582,8 @@ Generated with sawpro_to_cubase.
             "zip_download": f"/api/download/{session_id}/{urllib.parse.quote(zip_name)}",
             "audio_available": list({f.name for f in audio_files}),
             "audio_urls": audio_urls,
+            "track_mutes": session.track_mutes,
+            "track_solos": session.track_solos,
         }
 
         self.send_json_response(resp_data)

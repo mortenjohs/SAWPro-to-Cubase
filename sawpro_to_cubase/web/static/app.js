@@ -820,7 +820,21 @@ document.addEventListener('DOMContentLoaded', () => {
     player.fps = parseFloat(fpsSelect.value) || 30.0;
     player.trackGains.clear();
     player.trackMutes.clear();
+    if (data.track_mutes) {
+      for (const [trk, isMuted] of Object.entries(data.track_mutes)) {
+        if (isMuted) {
+          player.trackMutes.set(parseInt(trk, 10), true);
+        }
+      }
+    }
     player.trackSolos.clear();
+    if (data.track_solos) {
+      for (const [trk, isSolo] of Object.entries(data.track_solos)) {
+        if (isSolo) {
+          player.trackSolos.set(parseInt(trk, 10), true);
+        }
+      }
+    }
 
     // Downloads
     masterZipBtn.href = data.zip_download;
@@ -1101,6 +1115,9 @@ document.addEventListener('DOMContentLoaded', () => {
       muteBtn.className = 'btn-track-ms';
       muteBtn.textContent = 'M';
       muteBtn.title = 'Mute Track';
+      if (player.trackMutes.get(trackNum)) {
+        muteBtn.classList.add('mute-active');
+      }
       muteBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const active = !player.trackMutes.get(trackNum);
@@ -1113,6 +1130,9 @@ document.addEventListener('DOMContentLoaded', () => {
       soloBtn.className = 'btn-track-ms';
       soloBtn.textContent = 'S';
       soloBtn.title = 'Solo Track';
+      if (player.trackSolos.get(trackNum)) {
+        soloBtn.classList.add('solo-active');
+      }
       soloBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const active = !player.trackSolos.get(trackNum);
@@ -1165,6 +1185,9 @@ document.addEventListener('DOMContentLoaded', () => {
       lane.appendChild(track);
       timelineLanes.appendChild(lane);
     });
+
+    // Update track gain nodes and lane muted visual styles for initial project mutes
+    player.updateTrackGains();
   }
 
   // =========================================================================

@@ -415,10 +415,33 @@ def parse_edl(file_path: Path | str, audio_dir: Optional[Path | str] = None) -> 
 
     header.active_tracks = len(tracks)
 
+    # 7. Parse Track Mute and Solo States (MUTE and SOLO chunks)
+    track_mutes: dict[int, bool] = {}
+    match_mute = re.search(rb"MUTE\s*\x00", data)
+    if match_mute:
+        pos = match_mute.end()
+        if pos + 44 * 4 <= len(data):
+            vals = struct.unpack_from("<44I", data, pos)
+            for trk_idx, val in enumerate(vals, 1):
+                if val != 0:
+                    track_mutes[trk_idx] = True
+
+    track_solos: dict[int, bool] = {}
+    match_solo = re.search(rb"SOLO\s*\x00", data)
+    if match_solo:
+        pos = match_solo.end()
+        if pos + 44 * 4 <= len(data):
+            vals = struct.unpack_from("<44I", data, pos)
+            for trk_idx, val in enumerate(vals, 1):
+                if val != 0:
+                    track_solos[trk_idx] = True
+
     return SawSession(
         header=header,
         soundfiles=soundfiles,
         regions=regions,
         tracks=tracks,
+        track_mutes=track_mutes,
+        track_solos=track_solos,
         source_path=path,
     )

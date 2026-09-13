@@ -130,6 +130,49 @@ class TestParser(unittest.TestCase):
             self.assertIsNotNone(resolved_ok)
             self.assertEqual(resolved_ok.name, "klµpp.wav")
 
+    def test_parse_mutes_and_solos(self):
+        import struct
+        # Test with vel.edl: verify track_mutes and track_solos are parsed
+        if self.edl_file.is_file():
+            session = parse_edl(self.edl_file)
+            self.assertIsInstance(session.track_mutes, dict)
+            self.assertIsInstance(session.track_solos, dict)
+            # Active tracks 1, 2, 3 in vel.edl are unmuted
+            self.assertNotIn(1, session.track_mutes)
+            self.assertNotIn(2, session.track_mutes)
+            self.assertNotIn(3, session.track_mutes)
+
+        # Synthetic EDL test with explicit MUTE and SOLO flags
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir) / "synthetic.edl"
+            # Build minimal binary header and tags
+            edl_bytes = bytearray(b"SAWPLUS32 EDL  \x00")
+            edl_bytes.extend(b"SRATE   \x00" + struct.pack("<I", 44100))
+            edl_bytes.extend(b"SMPTE   \x00" + struct.pack("<I", 96))
+            edl_bytes.extend(b"FILES   \x00" + struct.pack("<II", 0, 336))
+            edl_bytes.extend(b"REGIONS \x00" + struct.pack("<II", 0, 160))
+
+            # Add MUTE chunk: mute tracks 4 and 7
+            mute_vals = [0] * 44
+            mute_vals[3] = 1  # Track 4
+            mute_vals[6] = 1  # Track 7
+            edl_bytes.extend(b"MUTE   \x00" + struct.pack("<44I", *mute_vals))
+
+            # Add SOLO chunk: solo track 2
+            solo_vals = [0] * 44
+            solo_vals[1] = 1  # Track 2
+            edl_bytes.extend(b"SOLO   \x00" + struct.pack("<44I", *solo_vals))
+
+            tmppath.write_bytes(bytes(edl_bytes))
+            synth_session = parse_edl(tmppath)
+
+            self.assertTrue(synth_session.track_mutes.get(4))
+            self.assertTrue(synth_session.track_mutes.get(7))
+            self.assertFalse(synth_session.track_mutes.get(1, False))
+
+            self.assertTrue(synth_session.track_solos.get(2))
+            self.assertFalse(synth_session.track_solos.get(1, False))
+
 
 if __name__ == "__main__":
     unittest.main()

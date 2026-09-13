@@ -95,6 +95,8 @@ class SawSession:
     soundfiles: list[SawSoundfile] = field(default_factory=list)
     regions: list[SawRegion] = field(default_factory=list)
     tracks: dict[int, list[SawTrackEvent]] = field(default_factory=dict)
+    track_mutes: dict[int, bool] = field(default_factory=dict)
+    track_solos: dict[int, bool] = field(default_factory=dict)
     source_path: Optional[Path] = None
 
     def get_soundfile(self, soundfile_id: int) -> Optional[SawSoundfile]:

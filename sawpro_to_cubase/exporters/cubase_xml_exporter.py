@@ -70,6 +70,11 @@ def export_cubase_xml(
             name=f"Track {track_num:02d}",
             type="audio",
         )
+        if session.track_mutes.get(track_num):
+            track_elem.set("mute", "1")
+        if session.track_solos.get(track_num):
+            track_elem.set("solo", "1")
+
         events_elem = ET.SubElement(track_elem, "events")
 
         for ev_idx, ev in enumerate(events):
