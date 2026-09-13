@@ -1,7 +1,13 @@
+import tempfile
 import unittest
+import wave
 from pathlib import Path
 
-from sawpro_to_cubase.parser import parse_edl
+from sawpro_to_cubase.parser import (
+    _find_audio_file,
+    get_filename_variants,
+    parse_edl,
+)
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "vals1"
 
@@ -75,6 +81,54 @@ class TestParser(unittest.TestCase):
     def test_missing_file_raises_error(self):
         with self.assertRaises(FileNotFoundError):
             parse_edl("non_existent_file.edl")
+
+    def test_filename_variants_transliteration(self):
+        # klæpp.wav (CP1252 'æ' 0xE6) <-> klµpp.wav (CP850 'µ' 0xE6)
+        variants_ae = get_filename_variants("klæpp.wav")
+        self.assertIn("klµpp.wav", variants_ae)
+
+        variants_mu = get_filename_variants("klµpp.wav")
+        self.assertIn("klæpp.wav", variants_mu)
+
+        # Other scandinavian characters
+        self.assertIn("bl°st.wav", get_filename_variants("bløst.wav"))
+        self.assertIn("bløst.wav", get_filename_variants("bl°st.wav"))
+
+    def test_find_audio_file_transliteration(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            # Create a file on disk with the OEM codepage transliteration name: klµpp.wav
+            actual_file = tmppath / "klµpp.wav"
+            with wave.open(str(actual_file), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(44100)
+                w.writeframes(b"\x00\x00" * 1000)
+
+            # Look for session name: klæpp.wav
+            resolved = _find_audio_file("klæpp.wav", [tmppath], min_frames=500)
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved.name, "klµpp.wav")
+
+    def test_find_audio_file_length_verification(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            # Create a short file on disk: 500 frames
+            short_file = tmppath / "klµpp.wav"
+            with wave.open(str(short_file), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(44100)
+                w.writeframes(b"\x00\x00" * 500)
+
+            # If the session requires at least 2000 frames, short_file should be rejected
+            resolved_too_short = _find_audio_file("klæpp.wav", [tmppath], min_frames=2000)
+            self.assertIsNone(resolved_too_short)
+
+            # If the session requires at most 400 frames, it should be accepted
+            resolved_ok = _find_audio_file("klæpp.wav", [tmppath], min_frames=400)
+            self.assertIsNotNone(resolved_ok)
+            self.assertEqual(resolved_ok.name, "klµpp.wav")
 
 
 if __name__ == "__main__":

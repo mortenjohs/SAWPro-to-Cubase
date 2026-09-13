@@ -60,6 +60,47 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentSessionData = null;
 
   // =========================================================================
+  // Filename Encoding & Codepage Transliteration Helper
+  // =========================================================================
+  function getFilenameVariants(name) {
+    if (!name) return [];
+    const variants = new Set();
+    variants.add(name);
+    variants.add(name.toLowerCase());
+
+    // Direct transliterations between Windows ANSI (CP1252) and DOS OEM (CP850/865/437)
+    const charPairs = [
+      ["æ", "µ"], ["ø", "°"], ["å", "Õ"], ["å", "σ"],
+      ["Æ", "ã"], ["Æ", "╞"], ["Ø", "Ï"], ["Ø", "╪"], ["Å", "┼"],
+      ["é", "Ú"], ["é", "Θ"], ["ä", "õ"], ["ä", "Σ"], ["ö", "÷"], ["ü", "³"], ["ü", "ⁿ"],
+      ["æ", "‘"], ["ø", "›"], ["å", "†"],
+      ["Æ", "’"], ["é", "‚"], ["ä", "„"], ["ö", "”"],
+    ];
+
+    for (const [a, b] of charPairs) {
+      if (name.includes(a)) {
+        const v = name.replaceAll(a, b);
+        variants.add(v);
+        variants.add(v.toLowerCase());
+      }
+      if (name.includes(b)) {
+        const v = name.replaceAll(b, a);
+        variants.add(v);
+        variants.add(v.toLowerCase());
+      }
+    }
+
+    try {
+      variants.add(name.normalize("NFC"));
+      variants.add(name.normalize("NFC").toLowerCase());
+      variants.add(name.normalize("NFD"));
+      variants.add(name.normalize("NFD").toLowerCase());
+    } catch (e) {}
+
+    return Array.from(variants);
+  }
+
+  // =========================================================================
   // Multitrack Web Audio Engine
   // =========================================================================
   class MultitrackPlayer {
@@ -100,6 +141,9 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const buffer = await this.audioCtx.decodeAudioData(arrayBuffer);
         this.audioBuffers.set(filename.toLowerCase(), buffer);
+        for (const v of getFilenameVariants(filename)) {
+          this.audioBuffers.set(v.toLowerCase(), buffer);
+        }
         return buffer;
       } catch (err) {
         console.warn(`Could not decode audio for ${filename}:`, err);
@@ -108,7 +152,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     hasAudioFor(filename) {
-      return this.audioBuffers.has((filename || '').toLowerCase());
+      if (!filename) return false;
+      const lower = filename.toLowerCase();
+      if (this.audioBuffers.has(lower)) return true;
+      for (const v of getFilenameVariants(filename)) {
+        if (this.audioBuffers.has(v.toLowerCase())) return true;
+      }
+      return false;
     }
 
     getTrackGain(trackNum) {
@@ -168,7 +218,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // Clip already finished before current playhead
         if (evEnd <= pos) continue;
 
-        const buffer = this.audioBuffers.get((ev.soundfile_name || '').toLowerCase());
+        let buffer = this.audioBuffers.get((ev.soundfile_name || '').toLowerCase());
+        if (!buffer && ev.soundfile_name) {
+          for (const v of getFilenameVariants(ev.soundfile_name)) {
+            buffer = this.audioBuffers.get(v.toLowerCase());
+            if (buffer) break;
+          }
+        }
         if (!buffer) continue;
 
         const source = this.audioCtx.createBufferSource();
@@ -620,6 +676,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     for (const filename of needed) {
       const lower = filename.toLowerCase();
+      const variants = getFilenameVariants(filename).map(v => v.toLowerCase());
 
       // 1. Check if already decoded
       if (player.hasAudioFor(filename)) {
@@ -628,11 +685,15 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       // 2. Check staged files in browser memory (instant client decode)
-      const staged = stagedFiles.find(f => f.name.toLowerCase() === lower);
+      const staged = stagedFiles.find(f => {
+        const fLower = f.name.toLowerCase();
+        return fLower === lower || variants.includes(fLower) || getFilenameVariants(f.name).some(v => variants.includes(v.toLowerCase()));
+      });
       if (staged) {
         try {
           const ab = await staged.arrayBuffer();
           await player.decodeAudio(filename, ab);
+          await player.decodeAudio(staged.name, ab);
           loadedCount++;
           setAudioStatus('loading', `Loading audio files (${loadedCount}/${needed.length})...`);
           continue;
@@ -641,11 +702,28 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // 3. Check if server has it
-      if (data.audio_urls && (data.audio_urls[filename] || data.audio_urls[lower])) {
-        const url = data.audio_urls[filename] || data.audio_urls[lower];
+      // 3. Check if server has it (direct or via transliterated variants)
+      let serverUrl = null;
+      if (data.audio_urls) {
+        for (const v of variants) {
+          if (data.audio_urls[v]) {
+            serverUrl = data.audio_urls[v];
+            break;
+          }
+        }
+        if (!serverUrl) {
+          for (const [k, u] of Object.entries(data.audio_urls)) {
+            if (variants.includes(k.toLowerCase())) {
+              serverUrl = u;
+              break;
+            }
+          }
+        }
+      }
+
+      if (serverUrl) {
         try {
-          const resp = await fetch(url);
+          const resp = await fetch(serverUrl);
           if (resp.ok) {
             const ab = await resp.arrayBuffer();
             await player.decodeAudio(filename, ab);
@@ -654,7 +732,7 @@ document.addEventListener('DOMContentLoaded', () => {
             continue;
           }
         } catch (e) {
-          console.warn('Failed fetching audio from server:', url, e);
+          console.warn('Failed fetching audio from server:', serverUrl, e);
         }
       }
     }
@@ -697,6 +775,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
           const ab = await f.arrayBuffer();
           await player.decodeAudio(f.name, ab);
+          stagedFiles.push(f);
         } catch (e) {
           console.warn('Error reading extra audio file:', f.name, e);
         }
@@ -711,8 +790,36 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.href = downloads[key];
       btn.style.display = 'inline-flex';
       btn.setAttribute('download', key);
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        const origContent = btn.innerHTML;
+        try {
+          btn.style.opacity = '0.6';
+          const resp = await fetch(btn.href);
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: resp.statusText }));
+            alert(`Download failed: ${err.error || resp.statusText}`);
+            return;
+          }
+          const blob = await resp.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = key;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+        } catch (err) {
+          alert(`Download error: ${err.message}`);
+        } finally {
+          btn.style.opacity = '1.0';
+          btn.innerHTML = origContent;
+        }
+      };
     } else {
       btn.style.display = 'none';
+      btn.onclick = null;
     }
   }
 

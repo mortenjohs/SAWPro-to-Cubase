@@ -19,7 +19,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..exporters import export_aaf, export_cmx3600, export_csv, export_cubase_xml
-from ..parser import parse_edl
+from ..parser import get_filename_variants, parse_edl
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,12 @@ class SawWebHandler(BaseHTTPRequestHandler):
 
                 audio_map = session_data["audio"]
                 target_file = audio_map.get(filename) or audio_map.get(filename.lower())
+                if not target_file:
+                    for v in get_filename_variants(filename):
+                        target_file = audio_map.get(v) or audio_map.get(v.lower())
+                        if target_file:
+                            break
+
                 if not target_file or not target_file.is_file():
                     self.send_error_json(f"Audio file '{filename}' not found", status=HTTPStatus.NOT_FOUND)
                     return
@@ -234,6 +240,9 @@ class SawWebHandler(BaseHTTPRequestHandler):
             out_file.write_bytes(part.get_payload(decode=True))
             session_data["audio"][safe_name] = out_file
             session_data["audio"][safe_name.lower()] = out_file
+            for v in get_filename_variants(safe_name):
+                session_data["audio"][v] = out_file
+                session_data["audio"][v.lower()] = out_file
             uploaded_names.append(safe_name)
 
         self.send_json_response({
@@ -427,6 +436,9 @@ Generated with sawpro_to_cubase.
         for f in audio_files:
             audio_map[f.name] = f
             audio_map[f.name.lower()] = f
+            for v in get_filename_variants(f.name):
+                audio_map[v] = f
+                audio_map[v.lower()] = f
 
         with CACHE_LOCK:
             SESSION_CACHE[session_id] = {
