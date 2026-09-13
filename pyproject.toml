@@ -25,7 +25,11 @@ classifiers = [
 
 [project.scripts]
 sawpro-to-cubase = "sawpro_to_cubase.cli:main"
+sawpro-web = "sawpro_to_cubase.web.server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["sawpro_to_cubase*"]
+
+[tool.setuptools.package-data]
+"sawpro_to_cubase.web" = ["static/*"]

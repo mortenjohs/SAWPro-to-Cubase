@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SAWPro to Cubase — Multi-Track EDL Converter</title>
+  <meta name="description" content="Reverse-engineer legacy IQS SAWPro / SAW32 EDL binary sessions and export to modern DAWs including Steinberg Cubase, Pro Tools, and Logic Pro.">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Navigation / Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M2 10v3m4-6v9m4-12v15m4-13v11m4-8v5m4-3v1"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">SAWPro &rarr; Cubase</span>
+          <span class="brand-subtitle">Legacy Session Reconstructor</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <span class="status-indicator online"></span>
+        <span class="status-text">Engine Ready</span>
+        <span class="version-badge">v0.1.0</span>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="app-main">
+      <!-- Intro Hero -->
+      <section class="hero-section" id="heroSection">
+        <h1 class="hero-title">Convert Legacy SAW Sessions to Modern DAWs</h1>
+        <p class="hero-desc">
+          Drag and drop your <strong>.EDL</strong> or <strong>.ED0</strong> files to parse track cuts and placements with single-sample accuracy.
+        </p>
+      </section>
+
+      <!-- Upload / Drop Zone -->
+      <section class="drop-section" id="dropSection">
+        <div class="drop-zone" id="dropZone">
+          <div class="drop-glow"></div>
+          <div class="drop-content">
+            <div class="drop-icon-wrapper">
+              <svg class="drop-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <h2 class="drop-title">Drop SAWPro session (.EDL / .ED0) here</h2>
+            <p class="drop-subtext">or drag associated audio (.wav) files together with your session</p>
+            
+            <div class="drop-buttons">
+              <label class="btn btn-primary" for="fileInput" id="chooseFileBtn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="12" y1="18" x2="12" y2="12"/>
+                  <line x1="9" y1="15" x2="15" y2="15"/>
+                </svg>
+                Choose Session &amp; Audio Files
+              </label>
+              <input type="file" id="fileInput" multiple accept=".edl,.ed0,.wav,.aif,.aiff" style="display: none;">
+
+              <label class="btn btn-secondary" for="folderInput" id="chooseFolderBtn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                Choose Project Folder
+              </label>
+              <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
+            </div>
+          </div>
+        </div>
+
+        <!-- File List / Staging -->
+        <div class="staging-panel" id="stagingPanel" style="display: none;">
+          <div class="staging-header">
+            <h3 class="staging-title">Staged Files (<span id="fileCount">0</span>)</h3>
+            <button class="btn-text text-danger" id="clearFilesBtn">Clear All</button>
+          </div>
+          <div class="file-chip-grid" id="fileChipGrid"></div>
+
+          <!-- Conversion Options Bar -->
+          <div class="options-bar">
+            <div class="option-item">
+              <label for="fpsSelect" class="option-label">SMPTE Frame Rate</label>
+              <select id="fpsSelect" class="select-control">
+                <option value="30.0" selected>30.0 fps (Standard)</option>
+                <option value="29.97">29.97 fps (NTSC)</option>
+                <option value="25.0">25.0 fps (PAL)</option>
+                <option value="24.0">24.0 fps (Film)</option>
+              </select>
+            </div>
+            <div class="option-item checkbox-item">
+              <label class="toggle-container">
+                <input type="checkbox" id="dropFrameCheckbox">
+                <span class="toggle-slider"></span>
+              </label>
+              <label for="dropFrameCheckbox" class="option-label">Drop Frame</label>
+            </div>
+            <div class="option-item checkbox-item">
+              <label class="toggle-container">
+                <input type="checkbox" id="embedAudioCheckbox">
+                <span class="toggle-slider"></span>
+              </label>
+              <label for="embedAudioCheckbox" class="option-label">Embed Audio in AAF</label>
+            </div>
+
+            <button class="btn btn-action" id="convertBtn">
+              <span class="btn-text-content">Parse &amp; Convert Session</span>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Processing Loading State -->
+      <section class="loading-section" id="loadingSection" style="display: none;">
+        <div class="audio-spinner">
+          <div class="bar bar-1"></div>
+          <div class="bar bar-2"></div>
+          <div class="bar bar-3"></div>
+          <div class="bar bar-4"></div>
+          <div class="bar bar-5"></div>
+        </div>
+        <h3 class="loading-title">Analyzing Session Binary Structure...</h3>
+        <p class="loading-desc">Extracting sample-accurate multi-track timeline and assembling DAW interchange archives.</p>
+      </section>
+
+      <!-- Results Dashboard -->
+      <section class="results-section" id="resultsSection" style="display: none;">
+        <!-- Top Toolbar with Reset -->
+        <div class="results-toolbar">
+          <div class="session-badge">
+            <span class="badge-label">Active Session:</span>
+            <span class="badge-value" id="resSessionName">vel.edl</span>
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn btn-outline" id="convertAnotherBtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="1 4 1 10 7 10"/>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+              </svg>
+              Convert Another
+            </button>
+            <a href="#" class="btn btn-action" id="masterZipBtn" download>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Download All as ZIP
+            </a>
+          </div>
+        </div>
+
+        <!-- Metric Stat Cards -->
+        <div class="metric-grid">
+          <div class="metric-card">
+            <span class="metric-label">Sample Rate</span>
+            <span class="metric-value text-cyan" id="metricSampleRate">44,100 Hz</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Session Magic</span>
+            <span class="metric-value text-blue" id="metricMagic">SAWPLUS32</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Active Tracks</span>
+            <span class="metric-value text-emerald" id="metricTracks">3 Tracks</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Timeline Placements</span>
+            <span class="metric-value" id="metricPlacements">3 Events</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Session Duration</span>
+            <span class="metric-value text-amber" id="metricDuration">01:48.85</span>
+          </div>
+        </div>
+
+        <!-- Visual Multi-Track Timeline & Audio Player -->
+        <div class="card timeline-card">
+          <div class="card-header">
+            <div class="card-title-group">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="2" y1="12" x2="22" y2="12"/>
+                <line x1="4" y1="8" x2="20" y2="8"/>
+                <line x1="6" y1="16" x2="18" y2="16"/>
+              </svg>
+              <h3 class="card-title">Multi-Track Timeline &amp; Audio Preview</h3>
+            </div>
+            <div class="header-audio-status" id="audioStatusContainer">
+              <span class="status-indicator" id="audioStatusIndicator"></span>
+              <span class="status-text" id="audioStatusText">Checking audio...</span>
+              <button class="btn btn-xs btn-outline" id="loadAudioFilesBtn" style="display: none;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                Load WAV Files
+              </button>
+              <input type="file" id="extraAudioInput" multiple accept=".wav,.WAV,.aif,.AIFF" style="display: none;">
+            </div>
+          </div>
+
+          <!-- DAW Transport Bar -->
+          <div class="transport-bar" id="transportBar">
+            <div class="transport-controls">
+              <button class="transport-btn" id="playPauseBtn" title="Play / Pause (Spacebar)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" id="playPauseIcon">
+                  <polygon points="6 4 20 12 6 20"/>
+                </svg>
+              </button>
+              <button class="transport-btn" id="stopBtn" title="Stop &amp; Return to Start">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="5" y="5" width="14" height="14" rx="2"/>
+                </svg>
+              </button>
+            </div>
+
+            <div class="transport-display">
+              <div class="display-main">
+                <span class="display-time" id="displayCurrentTime">00:00.00</span>
+                <span class="display-divider">/</span>
+                <span class="display-total" id="displayTotalTime">00:00.00</span>
+              </div>
+              <div class="display-sub">
+                <span class="smpte-badge" id="displayCurrentSmpte">00:00:00:00</span>
+              </div>
+            </div>
+
+            <div class="transport-volume">
+              <button class="vol-btn" id="volMuteBtn" title="Mute/Unmute Master">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="volIcon">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                </svg>
+              </button>
+              <input type="range" id="masterVolume" min="0" max="1" step="0.01" value="0.8" class="vol-slider" title="Master Volume">
+            </div>
+          </div>
+
+          <!-- Time Ruler & Lanes with Playhead Scrubber -->
+          <div class="timeline-container" id="timelineContainer">
+            <div class="timeline-playhead-wrapper">
+              <div class="timeline-playhead" id="timelinePlayhead" style="left: 0%;">
+                <div class="playhead-cap"></div>
+              </div>
+            </div>
+            <div class="timeline-ruler" id="timelineRuler"></div>
+            <div class="timeline-lanes" id="timelineLanes"></div>
+          </div>
+        </div>
+
+        <!-- Downloads Grid -->
+        <div class="card downloads-card">
+          <div class="card-header">
+            <div class="card-title-group">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <h3 class="card-title">DAW Interchange Files</h3>
+            </div>
+            <span class="card-subtitle">Ready for import into modern workstations</span>
+          </div>
+
+          <div class="downloads-grid">
+            <!-- AAF -->
+            <div class="export-box" id="exportBoxAaf">
+              <div class="export-box-icon aaf-icon">AAF</div>
+              <div class="export-box-content">
+                <h4 class="export-name">Universal AAF Archive</h4>
+                <p class="export-desc">Cubase Pro, Pro Tools, Logic Pro &amp; DaVinci Resolve with sample-accurate timeline placements.</p>
+              </div>
+              <a href="#" class="btn btn-sm btn-action" id="downloadBtnAaf" download>Download .AAF</a>
+            </div>
+
+            <!-- Cubase XML Track Archive -->
+            <div class="export-box" id="exportBoxXml">
+              <div class="export-box-icon xml-icon">XML</div>
+              <div class="export-box-content">
+                <h4 class="export-name">Cubase Track Archive</h4>
+                <p class="export-desc">Native Cubase/Nuendo XML. Import via <em>File &gt; Import &gt; Track Archive</em>.</p>
+              </div>
+              <a href="#" class="btn btn-sm btn-outline" id="downloadBtnXml" download>Download .XML</a>
+            </div>
+
+            <!-- CSV -->
+            <div class="export-box" id="exportBoxCsv">
+              <div class="export-box-icon csv-icon">CSV</div>
+              <div class="export-box-content">
+                <h4 class="export-name">Spreadsheet CSV</h4>
+                <p class="export-desc">Plain text table of all track placements, sample offsets, durations, and SMPTE timecodes.</p>
+              </div>
+              <a href="#" class="btn btn-sm btn-outline" id="downloadBtnCsv" download>Download .CSV</a>
+            </div>
+
+            <!-- CMX 3600 -->
+            <div class="export-box" id="exportBoxCmx">
+              <div class="export-box-icon cmx-icon">EDL</div>
+              <div class="export-box-content">
+                <h4 class="export-name">CMX 3600 EDL</h4>
+                <p class="export-desc">Industry-standard video and audio edit decision list format.</p>
+              </div>
+              <a href="#" class="btn btn-sm btn-outline" id="downloadBtnCmx" download>Download .EDL</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Soundfile & Region Tables -->
+        <div class="details-accordion">
+          <details class="details-panel" id="soundfilesPanel">
+            <summary class="details-summary">
+              <span>Referenced Audio Soundfiles (<span id="soundfilesCount">0</span>)</span>
+              <span class="chevron">&darr;</span>
+            </summary>
+            <div class="details-body">
+              <table class="data-table" id="soundfilesTable">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Filename</th>
+                    <th>Original DOS Path</th>
+                    <th>Status</th>
+                    <th>Format</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody id="soundfilesTableBody"></tbody>
+              </table>
+            </div>
+          </details>
+
+          <details class="details-panel" id="regionsPanel">
+            <summary class="details-summary">
+              <span>Defined Clip Regions (<span id="regionsCount">0</span>)</span>
+              <span class="chevron">&darr;</span>
+            </summary>
+            <div class="details-body">
+              <table class="data-table" id="regionsTable">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Region Name</th>
+                    <th>Soundfile</th>
+                    <th>In-Point (Samples)</th>
+                    <th>Out-Point (Samples)</th>
+                    <th>Duration (Samples)</th>
+                  </tr>
+                </thead>
+                <tbody id="regionsTableBody"></tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>SAWPro to Cubase &bull; Reverse-Engineering Suite</span>
+      <span>Platform: Python 3 &bull; Output: AAF / Cubase XML / CMX 3600 / CSV</span>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

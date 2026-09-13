@@ -58,7 +58,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "input_file",
         type=Path,
-        help="Path to the SAWPro .EDL or .ED0 session file.",
+        nargs="?",
+        default=None,
+        help="Path to the SAWPro .EDL or .ED0 session file (optional if --web is specified).",
+    )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Launch the interactive web application interface in your browser.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port for the web application server (default: 8080).",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not automatically open the web browser when launching --web.",
     )
     parser.add_argument(
         "-o",
@@ -120,6 +138,14 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
     )
+
+    if args.web:
+        from .web.server import run_server
+        run_server(port=args.port, open_browser=not args.no_browser)
+        return 0
+
+    if not args.input_file:
+        parser.error("the following arguments are required: input_file (or use --web to launch the web interface)")
 
     try:
         session = parse_edl(args.input_file, audio_dir=args.audio_dir)

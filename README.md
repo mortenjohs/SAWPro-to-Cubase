@@ -35,6 +35,31 @@ pip install -e .
 
 ---
 
+## Interactive Web Application & Audio Player
+
+Launch the local web application from the command line:
+
+```bash
+# Launch directly using the dedicated entrypoint
+sawpro-web
+
+# Or via the main CLI
+sawpro-to-cubase --web
+```
+
+### Web Features
+- **Drag-and-Drop Workflow**: Drag a session folder or drop `.edl`, `.ed0`, and `.wav` files directly into the browser.
+- **In-Browser Multitrack Audio Player**:
+  - Sample-accurate preview of the session using the native Web Audio API (`AudioContext`).
+  - **Full Transport Controls**: Play, Pause, Stop, Spacebar keyboard shortcut, master volume, and master mute.
+  - **Synchronized Moving Playhead**: An animated scrubber line sweeps across track lanes in sync with audio.
+  - **Click-to-Seek**: Click anywhere on the ruler, lanes, or clips to scrub immediately to that point in time.
+  - **Track Solo & Mute**: Toggle individual track `M` (Mute) and `S` (Solo) buttons directly from the track lane headers.
+  - **Client-Side Decoding**: Instant playback without server roundtrips when audio files are dropped into the browser.
+- **One-Click DAW Exports**: Download individual `.aaf`, `_cubase.xml`, `.csv`, `_cmx.edl` files, or download all bundled in an interchange ZIP.
+
+---
+
 ## Quickstart & CLI Usage
 
 Once installed, the CLI is available as `sawpro-to-cubase` or via `python -m sawpro_to_cubase`.
