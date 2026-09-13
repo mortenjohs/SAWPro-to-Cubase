@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sawpro_to_cubase"
+version = "0.1.0"
+description = "Reverse-engineer legacy SAWPro/SAW32 EDL files and export to modern DAWs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyaaf2>=1.7.0",
+]
+license = { text = "MIT" }
+authors = [
+    { name = "Morten Johs" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+[project.scripts]
+sawpro-to-cubase = "sawpro_to_cubase.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sawpro_to_cubase*"]
