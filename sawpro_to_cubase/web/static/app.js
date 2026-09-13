@@ -105,6 +105,42 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // =========================================================================
+  // Standalone Audio File Decoder (Isolated from Playback AudioContext)
+  // =========================================================================
+  let sharedDecoderCtx = null;
+
+  async function decodeAudioArrayBuffer(arrayBuffer) {
+    if (!sharedDecoderCtx || sharedDecoderCtx.state === 'closed') {
+      const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+      sharedDecoderCtx = new AudioCtxClass();
+    }
+    const copy = arrayBuffer.slice(0);
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const onSuccess = (buf) => {
+        if (!settled) {
+          settled = true;
+          resolve(buf);
+        }
+      };
+      const onError = (err) => {
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
+      };
+      try {
+        const promise = sharedDecoderCtx.decodeAudioData(copy, onSuccess, onError);
+        if (promise && typeof promise.then === 'function') {
+          promise.then(onSuccess).catch(onError);
+        }
+      } catch (err) {
+        onError(err);
+      }
+    });
+  }
+
+  // =========================================================================
   // Multitrack Web Audio Engine
   // =========================================================================
   class MultitrackPlayer {
@@ -118,7 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
       this.audioBuffers = new Map(); // filename.toLowerCase() -> AudioBuffer
       this.activeSources = [];
       this.isPlaying = false;
-      this.playbackStartCtxTime = 0;
+      this.playbackStartWallTime = 0;
       this.currentPositionSeconds = 0;
       this.sessionDuration = 0;
       this.events = [];
@@ -128,29 +164,67 @@ document.addEventListener('DOMContentLoaded', () => {
       this.lastVolume = 0.8;
     }
 
-    async initContext() {
-      if (!this.audioCtx) {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    unlockHardware() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!this.audioCtx || this.audioCtx.state === 'closed') {
         this.audioCtx = new AudioContextClass();
-        this.masterGain = this.audioCtx.createGain();
-        const vol = this.isMasterMuted ? 0.0 : (parseFloat(masterVolume.value) || 0.8);
-        this.masterGain.gain.setValueAtTime(vol, this.audioCtx.currentTime);
-        this.masterGain.connect(this.audioCtx.destination);
+        this.masterGain = null;
+        this.trackGains.clear();
       }
-      if (this.audioCtx.state === 'suspended') {
+
+      // Always guarantee masterGain exists and is connected to audio destination
+      if (!this.masterGain) {
+        this.masterGain = this.audioCtx.createGain();
+        this.masterGain.connect(this.audioCtx.destination);
+        this.trackGains.clear();
+      }
+
+      // Immediately request resume synchronously inside user gesture
+      if (this.audioCtx.state !== 'running') {
+        try {
+          this.audioCtx.resume();
+        } catch (e) {
+          console.warn('AudioContext resume error:', e);
+        }
+      }
+
+      // Prime WebKit audio engine with a 1-sample silent sound buffer
+      try {
+        const silentBuf = this.audioCtx.createBuffer(1, 1, 22050);
+        const silentSrc = this.audioCtx.createBufferSource();
+        silentSrc.buffer = silentBuf;
+        silentSrc.connect(this.audioCtx.destination);
+        silentSrc.start(0);
+      } catch (e) {}
+
+      const vol = this.isMasterMuted ? 0.0 : (parseFloat(masterVolume.value) || 0.8);
+      this.masterGain.gain.value = vol;
+      try {
+        this.masterGain.gain.setValueAtTime(vol, this.audioCtx.currentTime);
+      } catch (e) {}
+    }
+
+    async initContext() {
+      this.unlockHardware();
+      if (this.audioCtx && this.audioCtx.state !== 'running') {
         try {
           await this.audioCtx.resume();
         } catch (e) {
           console.warn('AudioContext resume failed:', e);
         }
       }
+      const vol = this.isMasterMuted ? 0.0 : (parseFloat(masterVolume.value) || 0.8);
+      if (this.masterGain) {
+        this.masterGain.gain.value = vol;
+        try {
+          this.masterGain.gain.setValueAtTime(vol, this.audioCtx.currentTime);
+        } catch (e) {}
+      }
     }
 
     async decodeAudio(filename, arrayBuffer) {
-      await this.initContext();
       try {
-        const copy = arrayBuffer.slice(0);
-        const buffer = await this.audioCtx.decodeAudioData(copy);
+        const buffer = await decodeAudioArrayBuffer(arrayBuffer);
         this.audioBuffers.set(filename.toLowerCase(), buffer);
         for (const v of getFilenameVariants(filename)) {
           this.audioBuffers.set(v.toLowerCase(), buffer);
@@ -193,10 +267,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     getTrackGain(trackNum) {
       if (!this.trackGains.has(trackNum)) {
-        if (!this.audioCtx) return null;
+        if (!this.audioCtx || !this.masterGain) return null;
         const gain = this.audioCtx.createGain();
         const shouldMute = this.shouldMuteTrack(trackNum);
-        gain.gain.setValueAtTime(shouldMute ? 0.0 : 1.0, this.audioCtx.currentTime);
+        const val = shouldMute ? 0.0 : 1.0;
+        gain.gain.value = val;
+        try {
+          gain.gain.setValueAtTime(val, this.audioCtx.currentTime);
+        } catch (e) {}
         gain.connect(this.masterGain);
         this.trackGains.set(trackNum, gain);
       }
@@ -206,11 +284,15 @@ document.addEventListener('DOMContentLoaded', () => {
     updateTrackGains() {
       const now = this.audioCtx ? this.audioCtx.currentTime : 0;
 
-      // Update Web Audio GainNodes
-      if (this.audioCtx) {
+      // Update Web Audio GainNodes directly
+      if (this.audioCtx && this.masterGain) {
         for (const [trackNum, gainNode] of this.trackGains.entries()) {
           const shouldMute = this.shouldMuteTrack(trackNum);
-          gainNode.gain.setValueAtTime(shouldMute ? 0.0 : 1.0, now);
+          const val = shouldMute ? 0.0 : 1.0;
+          gainNode.gain.value = val;
+          try {
+            gainNode.gain.setValueAtTime(val, now);
+          } catch (e) {}
         }
       }
 
@@ -223,30 +305,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async play(fromSeconds = null) {
+      // 1. Initialize hardware audio output inside user click handler
       await this.initContext();
       if (this.isPlaying) {
         this.stopSources();
       }
 
+      // 2. Position calculation
       if (fromSeconds !== null) {
         this.currentPositionSeconds = Math.max(0, Math.min(fromSeconds, this.sessionDuration));
       }
-
       if (this.currentPositionSeconds >= this.sessionDuration && this.sessionDuration > 0) {
         this.currentPositionSeconds = 0;
       }
 
-      // Sync track gains with current mute/solo state before playback
+      // 3. Ensure all track gain nodes exist and are wired
+      for (const ev of this.events) {
+        this.getTrackGain(ev.track);
+      }
       this.updateTrackGains();
 
       const now = this.audioCtx.currentTime;
-      this.playbackStartCtxTime = now - this.currentPositionSeconds;
       this.isPlaying = true;
       this.activeSources = [];
+      this.playbackStartWallTime = performance.now() - (this.currentPositionSeconds * 1000);
 
       const pos = this.currentPositionSeconds;
 
-      // Schedule clips across tracks safely
+      // 4. Schedule clips across tracks safely
       for (const ev of this.events) {
         const evStart = ev.start_seconds;
         const evEnd = evStart + ev.duration_seconds;
@@ -303,6 +389,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
+      console.log(`[Preview Player] Playing: ${this.activeSources.length} clips scheduled, AudioContext state: ${this.audioCtx.state}`);
+
       this.updateTransportUI(true);
       this.startAnimationLoop();
     }
@@ -352,15 +440,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const loop = () => {
         if (!this.isPlaying) return;
 
-        const elapsed = this.audioCtx.currentTime - this.playbackStartCtxTime;
-        this.currentPositionSeconds = elapsed;
+        const elapsedSec = (performance.now() - this.playbackStartWallTime) / 1000;
+        this.currentPositionSeconds = elapsedSec;
 
-        if (elapsed >= this.sessionDuration && this.sessionDuration > 0) {
+        if (elapsedSec >= this.sessionDuration && this.sessionDuration > 0) {
           this.stop();
           return;
         }
 
-        this.renderPosition(elapsed);
+        this.renderPosition(elapsedSec);
         this.animationFrameId = requestAnimationFrame(loop);
       };
       this.animationFrameId = requestAnimationFrame(loop);
@@ -396,15 +484,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     setMasterVolume(val) {
-      this.initContext();
       const v = Math.max(0, Math.min(1, val));
-      this.masterGain.gain.setValueAtTime(v, this.audioCtx.currentTime);
       this.isMasterMuted = v === 0;
+      if (this.masterGain && this.audioCtx) {
+        this.masterGain.gain.value = v;
+        this.masterGain.gain.setValueAtTime(v, this.audioCtx.currentTime);
+      }
       updateVolumeIcon(this.isMasterMuted);
     }
 
     toggleMasterMute() {
-      this.initContext();
       if (this.isMasterMuted) {
         const v = this.lastVolume > 0 ? this.lastVolume : 0.8;
         masterVolume.value = v;
@@ -421,7 +510,6 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error("Session duration is 0 seconds.");
       }
 
-      this.initContext();
       const sr = this.audioCtx ? this.audioCtx.sampleRate : targetSampleRate;
       const totalFrames = Math.max(1, Math.ceil(this.sessionDuration * sr));
 
@@ -1252,6 +1340,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Transport Event Listeners
   // =========================================================================
   playPauseBtn.addEventListener('click', async () => {
+    player.unlockHardware();
     if (player.isPlaying) {
       player.pause();
     } else {
@@ -1306,6 +1395,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (['input', 'select', 'textarea'].includes(activeTag)) return;
       if (resultsSection.style.display === 'block') {
         e.preventDefault();
+        player.unlockHardware();
         if (player.isPlaying) {
           player.pause();
         } else {
